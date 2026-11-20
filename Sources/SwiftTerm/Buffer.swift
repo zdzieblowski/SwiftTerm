@@ -975,6 +975,7 @@ public final class Buffer {
 
     public func clear ()
     {
+        cutCursorLine = nil
         yDisp = 0
         yBase = 0
         xBase = 0
@@ -1050,7 +1051,13 @@ public final class Buffer {
         // is cancelled; if not, the cursor stays on the last column and the
         // wrap stays pending, as in xterm and Ghostty.
         var cursorColumns = columnsBeforeCursor
-        let savedColumns = savedPendingWrap ? savedX + 1 : savedX
+        var savedColumns = savedPendingWrap ? savedX + 1 : savedX
+        // Before any line is resized: is the cut-off end of the cursor's
+        // line (see keepCursorLineTail) still good to put back?
+        let restorable = cols < newCols ? restorableCut () : nil
+        if cols > newCols, let cut = cutCursorLine, !isUntouched (cut) {
+            cutCursorLine = nil
+        }
         marginLeft = 0
         marginRight = newCols - 1
         let newMaxLength = getCorrectBufferLength(newRows)
@@ -1147,19 +1154,25 @@ public final class Buffer {
             reflow (newCols, newRows)
             // The cursor's line isn't reflowed (the program redraws it): if the
             // trim below cuts its end off, the end is kept, to be put back if
-            // the terminal widens again before anything changes that line.
+            // the terminal widens again before anything writes to that line.
             if cols > newCols {
-                keepCursorLineTail (newCols: newCols, cursorColumns: cursorColumns)
-            }
-            // Trim the end of the line off if cols shrunk
-            if cols > newCols {
+                keepCursorLineTail (newCols: newCols, cursorColumns: cursorColumns, savedColumns: savedColumns)
+                // Trim the end of the line off if cols shrunk
                 // lines.count, not lines.maxLength (see the widen loop above).
                 for i in 0..<lines.count {
                     lines[i].resize(cols: newCols,
                                     fill: defaultBlank)
                 }
-            } else if cols < newCols, let restored = restoreCursorLineTail (newCols: newCols) {
-                cursorColumns = restored
+                // From here on, any write to the line drops what was kept.
+                if let line = cutCursorLine?.line {
+                    cutCursorLine?.generation = line.generation
+                }
+            } else if cols < newCols, let cut = restorable {
+                let (cursor, saved) = restoreCursorLineTail (cut, newCols: newCols)
+                cursorColumns = cursor
+                if let saved {
+                    savedColumns = saved
+                }
             }
         }
         
@@ -1188,62 +1201,81 @@ public final class Buffer {
         }
     }
     
-    /// The end of the cursor's line that a narrowing cut off (see resize):
-    /// the line, how wide it was cut to, a copy of it as it was before the
-    /// cut, and where the cursor was in it.
-    struct CutCursorLine {
+    /// The end of the cursor's line that a narrowing cut off: the line (and
+    /// which use of it, as lines are recycled), its change counter right
+    /// after the cut, the width it was cut to, a copy of it as it was before
+    /// the cut, and the cursor (and saved cursor, if on that line) then.
+    private struct CutCursorLine {
         let line: BufferLine
+        let recycled: UInt64
+        var generation: UInt64
         var width: Int
         let full: BufferLine
         let fullLength: Int
         let cursorColumns: Int
+        let savedColumns: Int?
     }
-    var cutCursorLine: CutCursorLine? = nil
+    private var cutCursorLine: CutCursorLine? = nil
 
-    /// Before a narrowing trims the lines: if the cursor's line (on its own,
-    /// not wrapped) has text past `newCols`, a copy of it is kept. A program
-    /// that redraws its line after the resize (a shell's prompt) changes it,
-    /// and the copy is then not used.
-    func keepCursorLineTail (newCols: Int, cursorColumns: Int)
+    /// Nothing wrote to the cut line since (its counter, recorded after the
+    /// cut, is the same; the line wasn't recycled for another), the cursor
+    /// is still on it where the cut left it (pending wrap included), and
+    /// the line after it isn't a continuation of it.
+    private func isUntouched (_ cut: CutCursorLine) -> Bool
     {
         let index = yBase + y
-        guard index >= 0, index < lines.count else {
-            cutCursorLine = nil
-            return
+        guard index >= 0, index < lines.count, lines [index] === cut.line,
+              cut.line.recycleGeneration == cut.recycled, cut.line.generation == cut.generation,
+              columnsBeforeCursor == min (cut.cursorColumns, cut.width) else {
+            return false
         }
-        let line = lines [index]
-        let next = index + 1 < lines.count ? lines [index + 1] : nil
-        if var cut = cutCursorLine, cut.line === line, unchanged (cut, upTo: min (newCols, cut.width)) {
-            // Narrower again: the kept copy still holds the whole line.
-            cut.width = newCols
-            cutCursorLine = cut
-            return
-        }
-        let length = line.getTrimmedLength ()
-        guard !line.isWrapped, next?.isWrapped != true, length > newCols else {
-            cutCursorLine = nil
-            return
-        }
-        cutCursorLine = CutCursorLine (line: line, width: newCols, full: BufferLine (from: line),
-                                       fullLength: length, cursorColumns: cursorColumns)
+        return index + 1 >= lines.count || !lines [index + 1].isWrapped
     }
 
-    /// After a widening: if the cursor is still on the cut line, where the
-    /// cut left it, and the line is as it was cut, its end is put back (as
-    /// much as now fits) and the cursor goes back to where it was. Returns
-    /// the cursor's columns then, or nil.
-    func restoreCursorLineTail (newCols: Int) -> Int?
+    private func restorableCut () -> CutCursorLine?
     {
         guard let cut = cutCursorLine else {
             return nil
         }
-        let index = yBase + y
-        guard index >= 0, index < lines.count, lines [index] === cut.line,
-              x == min (cut.cursorColumns, cut.width - 1), unchanged (cut, upTo: cut.width),
-              cut.line.getTrimmedLength () <= cut.width else {
+        guard isUntouched (cut) else {
             cutCursorLine = nil
             return nil
         }
+        return cut
+    }
+
+    /// Before a narrowing trims the lines: if the cursor's line (on its own,
+    /// not wrapped) has text past `newCols`, a copy of it is kept. A program
+    /// that redraws its line after the resize writes to it, and the copy is
+    /// then dropped. Narrower again with nothing written since: the copy
+    /// already kept still holds the whole line.
+    private func keepCursorLineTail (newCols: Int, cursorColumns: Int, savedColumns: Int)
+    {
+        if let cut = cutCursorLine {
+            cutCursorLine?.width = min (cut.width, newCols)
+            return
+        }
+        let index = yBase + y
+        guard index >= 0, index < lines.count else {
+            return
+        }
+        let line = lines [index]
+        let next = index + 1 < lines.count ? lines [index + 1] : nil
+        let length = line.getTrimmedLength ()
+        guard !line.isWrapped, next?.isWrapped != true, length > newCols else {
+            return
+        }
+        cutCursorLine = CutCursorLine (line: line, recycled: line.recycleGeneration, generation: 0,
+                                       width: newCols, full: BufferLine (from: line), fullLength: length,
+                                       cursorColumns: cursorColumns,
+                                       savedColumns: savedY == y ? savedColumns : nil)
+    }
+
+    /// After a widening (its lines already widened): the cut line gets its
+    /// end back, as much as now fits, and the cursor (and a saved cursor
+    /// that was on it) where it was. Returns those columns.
+    private func restoreCursorLineTail (_ cut: CutCursorLine, newCols: Int) -> (cursor: Int, saved: Int?)
+    {
         let end = min (cut.fullLength, newCols)
         if end > cut.width {
             cut.line.copyFrom (cut.full, srcCol: cut.width, dstCol: cut.width, len: end - cut.width)
@@ -1252,21 +1284,16 @@ public final class Buffer {
             cutCursorLine = nil
         } else {
             cutCursorLine?.width = newCols
+            cutCursorLine?.generation = cut.line.generation
         }
-        return cut.cursorColumns
-    }
-
-    /// The line's first `width` cells still read as the kept copy's.
-    private func unchanged (_ cut: CutCursorLine, upTo width: Int) -> Bool
-    {
-        cut.line.translateToString (trimRight: false, startCol: 0, endCol: width)
-            == cut.full.translateToString (trimRight: false, startCol: 0, endCol: width)
+        return (cut.cursorColumns, savedY == y ? cut.savedColumns : nil)
     }
 
     /// Removes the scrollback history (the lines above the visible screen)
     /// without touching the visible screen contents or the buffer's capacity
     public func clearScrollback ()
     {
+        cutCursorLine = nil
         guard yBase > 0 else {
             return
         }
@@ -1279,6 +1306,7 @@ public final class Buffer {
 
     public func changeHistorySize (_ newScrollback: Int?)
     {
+        cutCursorLine = nil
         self.scrollback = newScrollback
         self.hasScrollback = newScrollback != nil
         
