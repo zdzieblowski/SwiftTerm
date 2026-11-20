@@ -492,12 +492,11 @@ final class LinkLookupTests: TerminalDelegate {
 
     @Test func testResizeWithoutReflowKeepsTheLink() {
         let url = "https://example.com/path/file.txt"
-        // The paragraph with the cursor in the normal buffer (the cursor
-        // back at its start, so the program is left to redraw it), and the
+        // The paragraph with the cursor in the normal buffer, and the
         // alternate buffer.
         for prefix in ["", "\u{1b}[?1049h"] {
             let terminal = Terminal(delegate: self, options: TerminalOptions(cols: 20, rows: 4))
-            terminal.feed(text: prefix + url + "\r")
+            terminal.feed(text: prefix + url)
             terminal.resize(cols: 30, rows: 4)
             #expect(terminal.displayBuffer.lines[1].isScreenEdgeWrapped)
             let expected: [Terminal.LinkMatch.RowRange] = [
@@ -516,7 +515,7 @@ final class LinkLookupTests: TerminalDelegate {
     @Test func testNarrowerResizeWithoutReflowDoesNotJoinCutRows() {
         for prefix in ["", "\u{1b}[?1049h"] {
             let terminal = Terminal(delegate: self, options: TerminalOptions(cols: 20, rows: 4))
-            terminal.feed(text: prefix + "https://example.com/path/file.txt\r")
+            terminal.feed(text: prefix + "https://example.com/path/file.txt")
             terminal.resize(cols: 12, rows: 4)
             let buffer = terminal.displayBuffer
             let row = (0..<buffer.lines.count).first { buffer.lines[$0].translateToString(trimRight: true).hasPrefix("https://") }!

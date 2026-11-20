@@ -1049,10 +1049,8 @@ public final class Buffer {
         // width has room for that column, the cursor goes there and the wrap
         // is cancelled; if not, the cursor stays on the last column and the
         // wrap stays pending, as in xterm and Ghostty.
-        var cursorColumns = columnsBeforeCursor
+        let cursorColumns = columnsBeforeCursor
         let savedColumns = savedPendingWrap ? savedX + 1 : savedX
-        reflowCursorColumns = cursorColumns
-        reflowedCursorColumns = nil
         marginLeft = 0
         marginRight = newCols - 1
         let newMaxLength = getCorrectBufferLength(newRows)
@@ -1147,10 +1145,6 @@ public final class Buffer {
         
         if isReflowEnabled {
             reflow (newCols, newRows)
-            // The cursor's own line was rewrapped: its column there.
-            if let moved = reflowedCursorColumns {
-                cursorColumns = moved
-            }
             // Trim the end of the line off if cols shrunk
             if cols > newCols {
                 // lines.count, not lines.maxLength (see the widen loop above).
@@ -1505,14 +1499,10 @@ public final class Buffer {
             }
 
             // If these lines contain the cursor don't touch them, the program will handle fixing up wrapped
-            // lines with the cursor; unless the cursor is past their text, see cursorColumnsPastText
-            var cursorPastText: Int? = nil
+            // lines with the cursor
             if bufferAbsoluteY >= y && bufferAbsoluteY < i {
-                guard let past = cursorColumnsPastText (wrappedLines, start: y) else {
-                    y += wrappedLines.count - 1
-                    continue
-                }
-                cursorPastText = past
+                y += wrappedLines.count - 1
+                continue
             }
             // Compute the new causes before the copy changes the rows.
             let softSeams = softSeamOffsets (of: wrappedLines, cols: oldCols)
@@ -1561,12 +1551,6 @@ public final class Buffer {
                             start: newCols - 1, end: newCols, fill: nullCell)
                     }
                 }
-            }
-
-            // The cursor follows the end of the text (the viewport adjustment moves it up by the
-            // lines removed). Text that ends exactly at the edge leaves it there, the wrap pending.
-            if let cursorPastText {
-                reflowedCursorColumns = (destCol == 0 && destLineIndex > 0 ? newCols : destCol) + cursorPastText
             }
 
             // Clear out remaining cells or fragments could remain;
@@ -1729,25 +1713,6 @@ public final class Buffer {
         public static func Null () -> InsertionSet { InsertionSet (lines: [], start: 0, isNull: true) }
     }
     
-    /// The cursor's columns before a resize, and where they are after its own line was reflowed.
-    var reflowCursorColumns = 0
-    var reflowedCursorColumns: Int? = nil
-
-    /// The wrapped lines from `start` hold the cursor. If it is on the last of them, at or past the
-    /// end of their text (a prompt waiting for input, like ssh's password prompt), they can be
-    /// reflowed like any others: nothing after the cursor moves, and the cursor follows the end of
-    /// the text. The cursor's columns past the text, or nil to leave the lines alone (the program
-    /// redraws them; until it does, the end of a line too long for a narrower terminal is lost).
-    /// Only with scrollback (a terminal without it doesn't reflow the cursor's lines either way).
-    func cursorColumnsPastText (_ wrappedLines: [BufferLine], start: Int) -> Int? {
-        guard (scrollback ?? 0) > 0, let last = wrappedLines.last,
-              yBase + self.y == start + wrappedLines.count - 1 else {
-            return nil
-        }
-        let textLength = last.getTrimmedLength ()
-        return reflowCursorColumns >= textLength ? reflowCursorColumns - textLength : nil
-    }
-
     func reflowNarrower (_ oldCols: Int, _ oldRows: Int, _ newCols: Int, _ newRows: Int)
     {
         // Gather all BufferLines that need to be inserted into the Buffer here so that they can be
@@ -1776,13 +1741,10 @@ public final class Buffer {
             }
 
             // If these lines contain the cursor don't touch them, the program will handle fixing up
-            // wrapped lines with the cursor; unless the cursor is past their text (a prompt waiting
-            // for input, which nothing redraws), see cursorColumnsPastText
+            // wrapped lines with the cursor
             let absoluteY = yBase + self.y
-            let cursorPastText = absoluteY >= y && absoluteY < y + wrappedLines.count
-                ? cursorColumnsPastText (wrappedLines, start: y) : nil
 
-            if absoluteY >= y && absoluteY < y + wrappedLines.count && cursorPastText == nil {
+            if absoluteY >= y && absoluteY < y + wrappedLines.count {
                 // These rows keep their cells, and the resize then cuts
                 // them. A row that loses text does not continue on the next
                 // row for link lookup.
@@ -1798,11 +1760,6 @@ public final class Buffer {
             let destLineLengths = getNewLineLengths (wrappedLines: wrappedLines, oldCols: oldCols, newCols: newCols)
             if destLineLengths.count == 0 {
                 continue
-            }
-            if let cursorPastText {
-                // The cursor follows the end of the text onto the last new line (the
-                // viewport adjustment below moves it down by the lines added)
-                reflowedCursorColumns = destLineLengths [destLineLengths.count - 1] + cursorPastText
             }
             let linesToAdd = destLineLengths.count - wrappedLines.count
 

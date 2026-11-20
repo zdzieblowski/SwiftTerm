@@ -192,34 +192,6 @@ final class ScreenTests {
         TerminalTestHarness.assertLineText(terminal.buffer, row: 1, equals: "world")
     }
 
-    /// A prompt waiting at the end of its line (nothing redraws it, like
-    /// ssh's password prompt) wraps when the terminal narrows and joins again
-    /// when it widens: none of it is lost, and the cursor stays after it.
-    @Test func testResizeReflowsThePromptLineWithTheCursorAfterIt() {
-        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 40, rows: 6, scrollback: 100)
-        terminal.feed(text: "first\r\nuser@example.com's password: ")
-        terminal.resize(cols: 12, rows: 6)
-        TerminalTestHarness.assertLineText(terminal.buffer, row: 1, equals: "user@example")
-        TerminalTestHarness.assertLineText(terminal.buffer, row: 2, equals: ".com's passw")
-        TerminalTestHarness.assertLineText(terminal.buffer, row: 3, equals: "ord: ")
-        TerminalTestHarness.assertCursor(terminal.buffer, col: 5, row: 3)
-        terminal.resize(cols: 40, rows: 6)
-        TerminalTestHarness.assertLineText(terminal.buffer, row: 1, equals: "user@example.com's password: ")
-        TerminalTestHarness.assertCursor(terminal.buffer, col: 29, row: 1)
-        terminal.feed(text: "x")
-        TerminalTestHarness.assertLineText(terminal.buffer, row: 1, equals: "user@example.com's password: x")
-    }
-
-    /// The cursor inside the text (a line being edited): left for the
-    /// program to redraw, as before.
-    @Test func testResizeLeavesTheLineWithTheCursorInsideIt() {
-        let (terminal, _) = TerminalTestHarness.makeTerminal(cols: 40, rows: 6, scrollback: 100)
-        terminal.feed(text: "user@example.com's password: \r")
-        terminal.resize(cols: 12, rows: 6)
-        TerminalTestHarness.assertLineText(terminal.buffer, row: 0, equals: "user@example")
-        TerminalTestHarness.assertCursor(terminal.buffer, col: 0, row: 0)
-    }
-
     // MARK: - Screen Tests Ported from Ghostty
 
     private let esc = "\u{1b}"
