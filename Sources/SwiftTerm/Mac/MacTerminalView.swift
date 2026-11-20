@@ -508,6 +508,12 @@ open class TerminalView: NSView, NSUserInterfaceValidations, TerminalDelegate {
     var _lineSpacing: CGFloat = 1.0
     var terminal: Terminal!
 
+    /// The terminal engine behind this view (its buffer, cursor and lines),
+    /// for hosts that need to read what's on screen.
+    public func getTerminal() -> Terminal {
+        terminal
+    }
+
     /// Marked (uncommitted) text from an input source (IME, dictation, etc.).
     private var markedTextStorage: NSAttributedString?
     private var markedSelectedRange: NSRange = NSRange(location: NSNotFound, length: 0)
