@@ -5698,12 +5698,12 @@ open class Terminal {
             // https://marc.info/?l=bugtraq&m=104612710031920&w=2
             sendResponse (cc.OSC, "l", cc.ST)
         case [22, 0], [22, 0, 0]:
-            terminalTitleStack = terminalTitleStack + [terminalTitle]
-            terminalIconStack = terminalIconStack + [iconTitle]
+            pushTitle(&terminalTitleStack, terminalTitle)
+            pushTitle(&terminalIconStack, iconTitle)
         case [22, 1]:
-            terminalIconStack = terminalIconStack + [iconTitle]
+            pushTitle(&terminalIconStack, iconTitle)
         case [22, 2]:
-            terminalTitleStack = terminalTitleStack + [terminalTitle]
+            pushTitle(&terminalTitleStack, terminalTitle)
         case [23, 0], [23, 0, 0]:
             if let nt = terminalTitleStack.last {
                 terminalTitleStack = terminalTitleStack.dropLast()
@@ -9535,6 +9535,15 @@ open class Terminal {
     
     var terminalTitle: String = ""              // The Xterm terminal title
     var iconTitle: String = ""                  // The Xterm minimized window title
+    /// Title stacks hold at most this many (as xterm): a program pushing
+    /// without end can't grow them without limit.
+    static let titleStackLimit = 10
+
+    func pushTitle(_ stack: inout [String], _ title: String) {
+        stack.append(title)
+        if stack.count > Terminal.titleStackLimit { stack.removeFirst(stack.count - Terminal.titleStackLimit) }
+    }
+
     var terminalTitleStack: [String] = []
     var terminalIconStack: [String] = []
     
